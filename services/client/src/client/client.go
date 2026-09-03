@@ -1,7 +1,9 @@
 package client
 
 import (
+	"bufio"
 	"net"
+	"os"
 	"time"
 
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/logger"
@@ -58,34 +60,73 @@ func connectToServer(host, port string) (net.Conn, error) {
 	return conn, err
 }
 
+func (client *Client) sendAndPersistResponse(recordMessage string, writer *bufio.Writer, messageId int) error {
+    messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
+    logger.Info("test-echo-server", logger.InProgress, messageArgs...)
+
+    if err := safe_socket.SendAll(client.conn, []byte(recordMessage)); err != nil {
+        logger.Error("send-message", logger.Fail, messageArgs...)
+        return err
+    }
+
+    responseBuffer, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
+    if err != nil {
+        logger.Error("recv-response", logger.Fail, messageArgs...)
+        return err
+    }
+
+	_, err = writer.Write(responseBuffer)
+	if err != nil {
+		logger.Error("write-to-buffer", logger.Fail, messageArgs...) // Adjust log tag as needed
+		return err
+	}
+
+	if _, err = writer.WriteString("\n"); err != nil {
+		logger.Error("write-newline", logger.Fail, messageArgs...)
+		return err
+	}
+
+    return nil
+}
+
 func (client *Client) Run() error {
 	const mainAction = "test-echo-server"
 	defer client.conn.Close()
 
-	for messageId := range ECHO_CLIENT_MESSAGE_AMOUNT {
-		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
-		logger.Info(mainAction, logger.InProgress, messageArgs...)
-
-		clientMessage := client.config.AgencyId
-
-		if err := safe_socket.SendAll(client.conn, []byte(clientMessage)); err != nil {
-			logger.Error("send-message", logger.Fail, messageArgs...)
-			return err
-		}
-
-		responseBuffer, err := safe_socket.RecvAll(client.conn, ECHO_CLIENT_BUFFER_SIZE)
-		if err != nil {
-			logger.Error("recv-response", logger.Fail, messageArgs...)
-			return err
-		}
-
-		if string(responseBuffer) != clientMessage {
-			logger.Error("check-response", logger.Fail, messageArgs...)
-			return err
-		}
-
-		time.Sleep(ECHO_CLIENT_MESSAGE_DELAY_MS * time.Millisecond)
+	inputPath := os.Getenv("INPUT_FILE")
+	inputFile, err := os.Open(inputPath)
+	if err != nil {
+		logger.Error("open-inputfile", logger.Fail, "path", inputPath)
+		return err
 	}
+	defer inputFile.Close()
+
+	outputPath := os.Getenv("OUTPUT_FILE")
+	outputFile, err := os.Create(os.Getenv("OUTPUT_FILE"))
+	if err != nil {
+		logger.Error("open-outputfile", logger.Fail, "path", outputPath)
+		return err
+	}
+	defer outputFile.Close()
+
+	writer := bufio.NewWriter(outputFile)
+	defer writer.Flush()
+
+	scanner := bufio.NewScanner(inputFile)
+	messageId := 0
+	for scanner.Scan() {
+		if err := client.sendAndPersistResponse(scanner.Text(), writer, messageId); err != nil {
+			return err
+		}
+		
+		messageId++
+	}
+
+	if err := scanner.Err(); err != nil {
+		logger.Error("read-inputfile", logger.Fail, "path", inputPath)
+		return err
+	}
+
 	logger.Info(mainAction, logger.Success, "agency-id", client.config.AgencyId)
 
 	return nil
