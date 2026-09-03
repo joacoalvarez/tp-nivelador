@@ -77,7 +77,7 @@ func (client *Client) sendAndPersistResponse(recordMessage string, writer *bufio
 
 	_, err = writer.Write(responseBuffer)
 	if err != nil {
-		logger.Error("write-to-buffer", logger.Fail, messageArgs...) // Adjust log tag as needed
+		logger.Error("write-to-buffer", logger.Fail, messageArgs...)
 		return err
 	}
 
@@ -118,7 +118,7 @@ func (client *Client) Run() error {
 		if err := client.sendAndPersistResponse(scanner.Text(), writer, messageId); err != nil {
 			return err
 		}
-		
+
 		messageId++
 	}
 
