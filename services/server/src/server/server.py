@@ -1,39 +1,80 @@
 import socket
+import os
 import logger
-import safe_socket
+from protocol.protocol import Protocol
+from bet_serializer.bet_serializer import deserialize_bet, serialize_bet
+from lottery.lottery import Lottery
 
-_ECHO_SERVER_MESSAGE_SIZE = 1024
 
 
 class Server:
     def __init__(self, server_host: str, server_port: int) -> None:
         self.server_host = server_host
         self.server_port = server_port
+        self.lottery_storage_path = os.environ.get(
+            "LOTTERY_STORAGE_PATH", "/lottery"
+        )
+        os.makedirs(self.lottery_storage_path, exist_ok=True)
+
+    def _lottery_for_agency(self, agency_id: int) -> Lottery:
+        storage_path = os.path.join(
+            self.lottery_storage_path, f"agency-{agency_id}.csv"
+        )
+        return Lottery(storage_path)
+
+    def _receive_bets(self, protocol: Protocol) -> tuple[int | None, int]:
+        agency_id = None
+        lottery = None
+        message_amount = 0
+
+        while True:
+            client_message = protocol.recv_message()
+            if protocol.is_fin(client_message):
+                return agency_id, message_amount
+
+            bet = deserialize_bet(client_message)
+            if agency_id is None:
+                agency_id = bet.agency_id
+                lottery = self._lottery_for_agency(agency_id)
+            elif agency_id != bet.agency_id:
+                raise ValueError("a connection cannot contain multiple agencies")
+
+            lottery.store_bets([bet])
+            message_amount += 1
+
+    def _send_winners(self, protocol: Protocol, agency_id: int | None) -> None:
+        if agency_id is not None:
+            lottery = self._lottery_for_agency(agency_id)
+            winners = []
+            for bet in lottery.load_bets():
+                if lottery.has_won(bet):
+                    winners.append(bet)
+            for winner in winners:
+                protocol.send_message(serialize_bet(winner))
+
+        protocol.send_fin()
 
     def _handle_client(self, client_socket):
         action = "handle-client"
-        message_amount = 0
+        protocol = Protocol(client_socket)
+
         try:
             logger.info(action, logger.LogResult.in_progress)
-            while True:
-                client_message = safe_socket.recv_all(
-                    client_socket, _ECHO_SERVER_MESSAGE_SIZE
-                )
-                if not client_message:
-                    logger.info(
-                        action,
-                        logger.LogResult.success,
-                        "messages-amount",
-                        message_amount,
-                    )
-                    return
-                message_amount += 1
-                safe_socket.send_all(client_socket, client_message)
+            agency_id, message_amount = self._receive_bets(protocol)
+            self._send_winners(protocol, agency_id)
+            logger.info(
+                action,
+                logger.LogResult.success,
+                "messages-amount",
+                message_amount,
+            )
         except Exception as e:
             logger.error(
-                action, logger.LogResult.fail, "messages-amount", message_amount
+                action, logger.LogResult.fail, "messages-amount"
             )
             raise e
+        finally:
+            client_socket.close()
 
     def run(self):
         action = "accept-connection"

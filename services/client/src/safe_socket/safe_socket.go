@@ -1,7 +1,6 @@
 package safe_socket
 
 import (
-	"encoding/binary"
 	"io"
 )
 
@@ -9,10 +8,13 @@ import (
 
 func SendAll(socket io.Writer, bytes []byte) error {
 	nSent := 0
-	for nSent < len(message) {
-		n, err := socket.Write(message[nSent:])
+	for nSent < len(bytes) {
+		n, err := socket.Write(bytes[nSent:])
 		if err != nil {
 			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
 		}
 		nSent += n
 	}
@@ -27,6 +29,9 @@ func RecvAll(socket io.Reader, size int) ([]byte, error) {
 		n, err := socket.Read(buffer[nRecv:])
 		if err != nil {
 			return nil, err
+		}
+		if n == 0 {
+			return nil, io.ErrNoProgress
 		}
 		nRecv += n
 	}

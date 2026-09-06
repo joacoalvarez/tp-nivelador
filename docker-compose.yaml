@@ -6,10 +6,13 @@ services:
     container_name: server
     ports:
       - "5678:5678"
+    volumes:
+      - ./lottery:/lottery
     environment:
       - PYTHONUNBUFFERED=1
       - SERVER_HOST=server
       - SERVER_PORT=5678
+      - LOTTERY_STORAGE_PATH=/lottery
 
   client_0:
     build:
