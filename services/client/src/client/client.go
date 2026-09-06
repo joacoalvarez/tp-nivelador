@@ -5,16 +5,17 @@ import (
 	"bytes"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/protocol"
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/bet_serializer"
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/logger"
+	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/protocol"
 )
 
 const CONNECTION_ATTEMPTS_MAX = 3
 const CONNECTION_ATTEMPS_DELAY_MS = 200
-
 
 type ClientConfig struct {
 	ServerHost string
@@ -24,9 +25,10 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	conn   net.Conn
-	config ClientConfig
-	protocol *protocol.Protocol
+	conn              net.Conn
+	config            ClientConfig
+	protocol          *protocol.Protocol
+	shutdownRequested bool
 }
 
 func NewClient(config ClientConfig) (*Client, error) {
@@ -70,6 +72,9 @@ func (client *Client) sendBatch(payloads [][]byte, messageId int) error {
 	messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
 	logger.Info("send-batch", logger.InProgress, messageArgs...)
 	if err := client.protocol.SendMessage(batchPayload); err != nil {
+		if client.shutdownRequested {
+			return nil
+		}
 		logger.Error("send-batch", logger.Fail, messageArgs...)
 		return err
 	}
@@ -83,6 +88,9 @@ func (client *Client) sendBets(inputFile *os.File) error {
 	payloads := make([][]byte, 0, client.config.BatchSize)
 
 	for scanner.Scan() {
+		if client.shutdownRequested {
+			return nil
+		}
 		agencyID := client.config.AgencyId
 		parsedBet, err := betserializer.ParseBet(scanner.Text(), agencyID)
 		if err != nil {
@@ -97,24 +105,40 @@ func (client *Client) sendBets(inputFile *os.File) error {
 		payloads = append(payloads, payload)
 		if len(payloads) == client.config.BatchSize {
 			if err := client.sendBatch(payloads, messageId); err != nil {
+				if client.shutdownRequested {
+					return nil
+				}
 				return err
 			}
 			messageId++
-			payloads = payloads[:0]		
+			payloads = payloads[:0]
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
+		if client.shutdownRequested {
+			return nil
+		}
 		logger.Error("read-inputfile", logger.Fail, "path", inputFile)
 		return err
 	}
 
+	if client.shutdownRequested {
+		return nil
+	}
+
 	// Send missing bets
 	if err := client.sendBatch(payloads, messageId); err != nil {
+		if client.shutdownRequested {
+			return nil
+		}
 		return err
 	}
 
 	if err := client.protocol.SendFin(); err != nil {
+		if client.shutdownRequested {
+			return nil
+		}
 		return err
 	}
 
@@ -123,8 +147,15 @@ func (client *Client) sendBets(inputFile *os.File) error {
 
 func (client *Client) recvResults(writer *bufio.Writer) error {
 	for {
+		if client.shutdownRequested {
+			return nil
+		}
+
 		responseBuffer, err := client.protocol.RecvMessage()
 		if err != nil {
+			if client.shutdownRequested {
+				return nil
+			}
 			logger.Error("recv-response", logger.Fail)
 			return err
 		}
@@ -135,6 +166,9 @@ func (client *Client) recvResults(writer *bufio.Writer) error {
 
 		parsedBet, err := betserializer.DeserializeBet(responseBuffer)
 		if err != nil {
+			if client.shutdownRequested {
+				return nil
+			}
 			logger.Error("deserialize-response", logger.Fail)
 			return err
 		}
@@ -149,34 +183,62 @@ func (client *Client) recvResults(writer *bufio.Writer) error {
 	}
 }
 
-
 func (client *Client) Run() error {
 	const mainAction = "test-echo-server"
 	defer client.conn.Close()
 
+	// Set up signal handling for graceful shutdown
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
+	client.shutdownRequested = false
+
+	// Goroutine to listen for shutdown signals
+	go func() {
+		<-shutdownChan
+		client.shutdownRequested = true
+		logger.Info("graceful-shutdown", logger.InProgress)
+		client.conn.Close()
+	}()
+
 	inputPath := os.Getenv("INPUT_FILE")
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
+		if client.shutdownRequested {
+			logger.Info("graceful-shutdown", logger.Success)
+			return nil
+		}
 		logger.Error("open-inputfile", logger.Fail, "path", inputPath)
 		return err
 	}
 	defer inputFile.Close()
 
 	outputPath := os.Getenv("OUTPUT_FILE")
-	outputFile, err := os.Create(os.Getenv("OUTPUT_FILE"))
+	outputFile, err := os.Create(outputPath)
 	if err != nil {
+		if client.shutdownRequested {
+			logger.Info("graceful-shutdown", logger.Success)
+			return nil
+		}
 		logger.Error("open-outputfile", logger.Fail, "path", outputPath)
 		return err
 	}
 	defer outputFile.Close()
 
 	if err := client.sendBets(inputFile); err != nil {
+		if client.shutdownRequested {
+			logger.Info("graceful-shutdown", logger.Success)
+			return nil
+		}
 		return err
 	}
 
 	writer := bufio.NewWriter(outputFile)
 	defer writer.Flush()
 	if err := client.recvResults(writer); err != nil {
+		if client.shutdownRequested {
+			logger.Info("graceful-shutdown", logger.Success)
+			return nil
+		}
 		return err
 	}
 

@@ -11,7 +11,6 @@ import (
 const headerSize = 4
 const maxPayloadSize = (uint64(1) << (headerSize * 8)) - 1 // 2^32 bits max
 
-
 type Protocol struct {
 	socket io.ReadWriter
 	buffer []byte
