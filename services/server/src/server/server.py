@@ -1,5 +1,6 @@
 import socket
 import os
+import threading
 import logger
 from protocol.protocol import Protocol
 from bet_serializer.bet_serializer import deserialize_bets, serialize_bet
@@ -16,6 +17,12 @@ class Server:
         )
         os.makedirs(self.lottery_storage_path, exist_ok=True)
         self._clear_lottery_storage()
+        self.agency_quorum_min = int(os.environ.get("AGENCY_QUORUM_MIN", "1"))
+        if self.agency_quorum_min <= 0:
+            raise ValueError("AGENCY_QUORUM_MIN must be positive")
+        self.quorum_condition = threading.Condition()
+        self.completed_agencies = set()
+
 
     def _clear_lottery_storage(self) -> None:
         for filename in os.listdir(self.lottery_storage_path):
@@ -63,6 +70,16 @@ class Server:
 
         protocol.send_fin()
 
+    def _wait_agency_quorum(self, agency_id: int | None) -> None:
+        if agency_id is None:
+            return
+
+        with self.quorum_condition:
+            self.completed_agencies.add(agency_id)
+            self.quorum_condition.notify_all()
+            while len(self.completed_agencies) < self.agency_quorum_min:
+                self.quorum_condition.wait()
+
     def _handle_client(self, client_socket):
         action = "handle-client"
         protocol = Protocol(client_socket)
@@ -70,6 +87,7 @@ class Server:
         try:
             logger.info(action, logger.LogResult.in_progress)
             agency_id, message_amount = self._receive_bets(protocol)
+            self._wait_agency_quorum(agency_id)
             self._send_winners(protocol, agency_id)
             logger.info(
                 action,
@@ -99,4 +117,8 @@ class Server:
                     raise e
                 logger.info(action, logger.LogResult.success)
 
-                self._handle_client(client_socket)
+                client_thread = threading.Thread(
+                    target=self._handle_client,
+                    args=(client_socket,),
+                )
+                client_thread.start()
