@@ -15,6 +15,11 @@ class Server:
             "LOTTERY_STORAGE_PATH", "/lottery"
         )
         os.makedirs(self.lottery_storage_path, exist_ok=True)
+        self._clear_lottery_storage()
+
+    def _clear_lottery_storage(self) -> None:
+        for filename in os.listdir(self.lottery_storage_path):
+            os.remove(os.path.join(self.lottery_storage_path, filename))
 
     def _lottery_for_agency(self, agency_id: int) -> Lottery:
         storage_path = os.path.join(
