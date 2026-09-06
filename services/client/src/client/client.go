@@ -100,7 +100,7 @@ func (client *Client) sendBets(inputFile *os.File) error {
 				return err
 			}
 			messageId++
-			clear(payloads[:])
+			payloads = payloads[:0]		
 		}
 	}
 

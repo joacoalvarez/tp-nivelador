@@ -24,7 +24,7 @@ type bet struct {
 	lastName  []byte
 	document  uint32
 	birthdate []byte
-	number    uint16
+	number    uint32
 }
 
 func ParseBet(record string, agencyID string) (bet, error) {
@@ -55,7 +55,7 @@ func ParseBet(record string, agencyID string) (bet, error) {
 	if err != nil {
 		return bet{}, err
 	}
-	number, err := strconv.ParseUint(fields[numberFieldIndex], 10, 16)
+	number, err := strconv.ParseUint(fields[numberFieldIndex], 10, 32)
 	if err != nil {
 		return bet{}, err
 	}
@@ -66,7 +66,7 @@ func ParseBet(record string, agencyID string) (bet, error) {
 		lastName:  lastName,
 		document:  uint32(document),
 		birthdate: birthdate,
-		number:    uint16(number),
+		number:    uint32(number),
 	}, nil
 }
 

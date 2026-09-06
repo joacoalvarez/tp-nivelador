@@ -10,7 +10,7 @@ const (
 	lengthByteSize    = 2
     documentByteSize  = 4
     birthdateByteSize = 10 // YYYY-MM-DD
-    numberByteSize    = 2
+    numberByteSize    = 4
 )
 
 func createPayload(bet bet) []byte {
@@ -31,7 +31,7 @@ func createPayload(bet bet) []byte {
     binary.BigEndian.PutUint32(payload[offset:], bet.document)
     offset += documentByteSize
     offset += copy(payload[offset:], bet.birthdate)
-    binary.BigEndian.PutUint16(payload[offset:], bet.number)
+    binary.BigEndian.PutUint32(payload[offset:], bet.number)
 
     return payload
 }
@@ -58,7 +58,7 @@ func readNumber(payload []byte, offset *int, size int, fieldName string) (uint32
     }
 
     switch size {
-    case numberByteSize:
+    case lengthByteSize:
         return uint32(binary.BigEndian.Uint16(value)), nil
     case agencyByteSize:
         return binary.BigEndian.Uint32(value), nil
@@ -113,7 +113,7 @@ func deserializeBet(payload []byte) (bet, error) {
         lastName:  lastName,
         document:  document,
         birthdate: birthdate,
-        number:    uint16(number),
+        number:    number,
     }, nil
 }
 
