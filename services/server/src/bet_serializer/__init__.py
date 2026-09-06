@@ -1,1 +1,1 @@
-from .bet_serializer import serialize_bet, deserialize_bet
+from .bet_serializer import deserialize_bets, serialize_bet

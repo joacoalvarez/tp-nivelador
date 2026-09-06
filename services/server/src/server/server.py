@@ -2,7 +2,7 @@ import socket
 import os
 import logger
 from protocol.protocol import Protocol
-from bet_serializer.bet_serializer import deserialize_bet, serialize_bet
+from bet_serializer.bet_serializer import deserialize_bets, serialize_bet
 from lottery.lottery import Lottery
 
 
@@ -32,16 +32,20 @@ class Server:
             if protocol.is_fin(client_message):
                 return agency_id, message_amount
 
-            bet = deserialize_bet(client_message)
+            bets = deserialize_bets(client_message)
+            if not bets:
+                raise ValueError("batch cannot be empty")
+
+            batch_agency_id = bets[0].agency_id
             if agency_id is None:
-                agency_id = bet.agency_id
+                agency_id = batch_agency_id
                 lottery = self._lottery_for_agency(agency_id)
-            elif agency_id != bet.agency_id:
+            elif agency_id != batch_agency_id:
                 raise ValueError("a connection cannot contain multiple agencies")
 
-            lottery.store_bets([bet])
-            message_amount += 1
-
+            lottery.store_bets(bets)
+            message_amount += len(bets)
+            
     def _send_winners(self, protocol: Protocol, agency_id: int | None) -> None:
         if agency_id is not None:
             lottery = self._lottery_for_agency(agency_id)

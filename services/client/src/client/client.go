@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"os"
 	"time"
@@ -19,6 +20,7 @@ type ClientConfig struct {
 	ServerHost string
 	ServerPort string
 	AgencyId   string
+	BatchSize  int
 }
 
 type Client struct {
@@ -59,15 +61,29 @@ func connectToServer(host, port string) (net.Conn, error) {
 	return conn, err
 }
 
+func (client *Client) sendBatch(payloads [][]byte, messageId int) error {
+	if len(payloads) == 0 {
+		return nil
+	}
+
+	batchPayload := bytes.Join(payloads, nil)
+	messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
+	logger.Info("send-batch", logger.InProgress, messageArgs...)
+	if err := client.protocol.SendMessage(batchPayload); err != nil {
+		logger.Error("send-batch", logger.Fail, messageArgs...)
+		return err
+	}
+
+	return nil
+}
 
 func (client *Client) sendBets(inputFile *os.File) error {
 	scanner := bufio.NewScanner(inputFile)
 	messageId := 0
+	payloads := make([][]byte, 0, client.config.BatchSize)
+
 	for scanner.Scan() {
 		agencyID := client.config.AgencyId
-		messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
-		logger.Info("test-echo-server", logger.InProgress, messageArgs...)
-
 		parsedBet, err := betserializer.ParseBet(scanner.Text(), agencyID)
 		if err != nil {
 			return err
@@ -78,16 +94,23 @@ func (client *Client) sendBets(inputFile *os.File) error {
 			return err
 		}
 
-		if err := client.protocol.SendMessage(payload); err != nil {
-			logger.Error("send-message", logger.Fail, messageArgs...)
-			return err
+		payloads = append(payloads, payload)
+		if len(payloads) == client.config.BatchSize {
+			if err := client.sendBatch(payloads, messageId); err != nil {
+				return err
+			}
+			messageId++
+			clear(payloads[:])
 		}
-
-		messageId++
 	}
 
 	if err := scanner.Err(); err != nil {
 		logger.Error("read-inputfile", logger.Fail, "path", inputFile)
+		return err
+	}
+
+	// Send missing bets
+	if err := client.sendBatch(payloads, messageId); err != nil {
 		return err
 	}
 

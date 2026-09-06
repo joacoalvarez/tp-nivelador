@@ -50,8 +50,7 @@ def read_text(payload: bytes, offset: int, field_name: str) -> tuple[str, int]:
     value, offset = read_bytes(payload, offset, size, field_name)
     return value.decode("utf-8"), offset
 
-def deserialize_bet(payload: bytes) -> Bet:
-    offset = 0
+def deserialize_bet_at(payload: bytes, offset: int) -> tuple[Bet, int]:
 
     agency_id, offset = read_number(payload, offset, _SERIALIZED_AGENCY_SIZE, "agency ID")
     first_name, offset = read_text(payload, offset, "first name")
@@ -61,9 +60,6 @@ def deserialize_bet(payload: bytes) -> Bet:
     birthdate = birthdate_bytes.decode("utf-8")
     number, offset = read_number(payload, offset, _SERIALIZED_NUMBER_SIZE, "number")
 
-    if offset != len(payload):
-        raise ValueError("payload has unexpected trailing bytes")
-
     return Bet(
         agency_id=agency_id,
         first_name=first_name,
@@ -71,4 +67,12 @@ def deserialize_bet(payload: bytes) -> Bet:
         document=document,
         birthdate=birthdate,
         number=number,
-    )
+    ), offset
+
+def deserialize_bets(payload: bytes) -> list[Bet]:
+    bets = []
+    offset = 0
+    while offset < len(payload):
+        bet, offset = deserialize_bet_at(payload, offset)
+        bets.append(bet)
+    return bets
