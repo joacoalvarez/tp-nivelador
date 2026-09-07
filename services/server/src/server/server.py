@@ -3,7 +3,11 @@ import signal
 import os
 import threading
 import logger
-from protocol.protocol import Protocol
+from protocol.protocol import (
+    Protocol,
+    OPCODE_DATA,
+    OPCODE_FIN,
+)
 from bet_serializer.bet_serializer import deserialize_bets, serialize_bet
 from lottery.lottery import Lottery
 
@@ -68,24 +72,40 @@ class Server:
         message_amount = 0
 
         while not self.shutdown_event.is_set():
-            client_message = protocol.recv_message()
-            if protocol.is_fin(client_message):
+            opcode, client_message = protocol.recv_message()
+            if opcode == OPCODE_FIN:
                 return agency_id, message_amount
 
-            bets = deserialize_bets(client_message)
-            if not bets:
-                raise ValueError("batch cannot be empty")
+            if opcode != OPCODE_DATA:
+                try:
+                    protocol.send_err()
+                except Exception:
+                    pass
+                raise ValueError(f"unexpected opcode: {opcode}")
 
-            batch_agency_id = bets[0].agency_id
-            if agency_id is None:
-                agency_id = batch_agency_id
-                lottery = self._lottery_for_agency(agency_id)
-            elif agency_id != batch_agency_id:
-                raise ValueError("a connection cannot contain multiple agencies")
+            try:
+                bets = deserialize_bets(client_message)
+                if not bets:
+                    raise ValueError("batch cannot be empty")
 
-            lottery.store_bets(bets)
-            message_amount += len(bets)
-            
+                batch_agency_id = bets[0].agency_id
+                if agency_id is None:
+                    agency_id = batch_agency_id
+                    lottery = self._lottery_for_agency(agency_id)
+                elif agency_id != batch_agency_id:
+                    raise ValueError("a connection cannot contain multiple agencies")
+
+                lottery.store_bets(bets)
+                message_amount += len(bets)
+                protocol.send_ack()
+            except Exception as e:
+                logger.error("receive-bets", logger.LogResult.fail, "err", e)
+                try:
+                    protocol.send_err()
+                except Exception:
+                    pass
+                continue
+
     def _send_winners(self, protocol: Protocol, agency_id: int | None) -> None:
         if self.shutdown_event.is_set():
             return
@@ -98,7 +118,7 @@ class Server:
             for winner in winners:
                 if self.shutdown_event.is_set():
                     return
-                protocol.send_message(serialize_bet(winner))
+                protocol.send_data(serialize_bet(winner))
 
         protocol.send_fin()
 

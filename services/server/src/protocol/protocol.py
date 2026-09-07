@@ -1,8 +1,15 @@
 import socket
 import safe_socket
 
-_HEADER_SIZE = 4
-_MAX_PAYLOAD_SIZE = (1 << (_HEADER_SIZE * 8)) - 1 # 2^32 bits max
+OPCODE_DATA = 0
+OPCODE_ACK = 1
+OPCODE_ERR = 2
+OPCODE_FIN = 3
+
+_OPCODE_SIZE = 1
+_LENGTH_SIZE = 4
+_HEADER_SIZE = _OPCODE_SIZE + _LENGTH_SIZE
+_MAX_PAYLOAD_SIZE = (1 << (_LENGTH_SIZE * 8)) - 1  # 2^32 bits max
 
 class Protocol:
 	def __init__(self, socket: socket.socket):
@@ -19,27 +26,34 @@ class Protocol:
 		del self._buffer[:size]
 		return bytes(result)
 
-	def recv_message(self):
+	def recv_message(self) -> tuple[int, bytes]:
 		header = self._get_bytes(_HEADER_SIZE)
-		payload_length = int.from_bytes(header, byteorder='big')
-		return self._get_bytes(payload_length)
+		opcode = header[0]
+		payload_length = int.from_bytes(header[_OPCODE_SIZE:_HEADER_SIZE], byteorder='big')
+		return opcode, self._get_bytes(payload_length)
 
-	@staticmethod
-	def is_fin(payload: bytes) -> bool:
-		return len(payload) == 0
-
-	def _create_message(self, payload: bytes) -> bytes:
+	def _create_message(self, opcode:int, payload: bytes) -> bytes:
 		payload_length = len(payload)
 		if payload_length > _MAX_PAYLOAD_SIZE:
 			raise ValueError(
 				f"payload size {payload_length} exceeds maximum {_MAX_PAYLOAD_SIZE}"
 			)
-		header = payload_length.to_bytes(_HEADER_SIZE, byteorder='big')
-		return header + payload
+		opcode_bytes = opcode.to_bytes(_OPCODE_SIZE, byteorder="big")
+		length_bytes = payload_length.to_bytes(_LENGTH_SIZE, byteorder='big')
+		return opcode_bytes + length_bytes + payload
 
-	def send_message(self, payload: bytes):
-		msg = self._create_message(payload)
+	def send_message(self, opcode: int, payload: bytes = b""):
+		msg = self._create_message(opcode, payload)
 		safe_socket.send_all(self._socket, msg)
+	
+	def send_data(self, payload: bytes):
+		self.send_message(OPCODE_DATA, payload)
+
+	def send_ack(self):
+		self.send_message(OPCODE_ACK, b"")
+
+	def send_err(self):
+		self.send_message(OPCODE_ERR, b"")
 
 	def send_fin(self):
-		self.send_message(b"")
+		self.send_message(OPCODE_FIN, b"")

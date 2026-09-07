@@ -3,13 +3,22 @@
 ## Protocolo
 
 ### Safe Socket (short read/write)
-Para solucionar el problema de *short read / short write*, se envolvieron las operaciones de socket en loops (`send_all` / `recv_all`). Estos loops continuan transmitiendo y recibiendo datos de forma iterativa hasta completar la cantidad exacta de bytes requeridos.
+Para solucionar el problema de *short read / short write*, se envolvieron las operaciones de socket en loops (`send_all` / `recv_all`). Estos loops continúan transmitiendo y recibiendo datos de forma iterativa hasta completar la cantidad exacta de bytes requeridos.
 
-### Payload Length Header
-Para delimitar los mensajes en el flujo de bytes TCP, cada mensaje se le agrega un encabezado de 4 bytes (`uint32` en big-endian) que especifica la longitud del payload.
+### Encabezado del Mensaje (Type + Length)
+Para delimitar los tipos de mensaje y su final en el flujo TCP, cada paquete cuenta con un encabezado de 5 bytes:
+- **Opcode (1 byte)**: Indica el tipo del mensaje:
+  - `0` (**DATA**): Contiene datos de apuestas
+  - `1` (**ACK**): Confirmacion enviada por el servidor indicando que el lote fue procesado y almacenado correctamente.
+  - `2` (**ERR**): Mensaje de error enviado por el servidor ante fallas de validacion, deserializacion o incompatibilidad en el lote.
+  - `3` (**FIN**): Señal explicita de fin de transmisión de datos.
+- **Payload Length (4 bytes)**: Entero de 32 bits en formato *big-endian* (`uint32`) que especifica el tamaño en bytes del cuerpo del mensaje.
 
-### Fin Transmision
-Cuando el emisor termina la transmision, envia un mensaje (**FIN**) cuyo identificador es el payload de longitud 0.
+### Confirmacion por Chunk y Reintentos (ACK / ERR)
+Por cada chunk de apuestas enviado por el cliente con el opcode `DATA` (`0`), el servidor valida y almacena los datos. Si la operacion es exitosa, el servidor responde con un mensaje `ACK` (`1`). En caso de falla, el servidor responde con un mensaje `ERR` (`2`). Ante la recepcion de un mensaje `ERR`, el cliente efectua el reenvio automatico del chunk afectado (hasta un maximo de 3 reintentos). El servidor se mantiene a la espera del reenvio sobre la misma conexion.
+
+### Fin de Transmisión
+Cuando el emisor concluye el envio de la totalidad de los datos (chunks de apuestas desde el cliente o apuestas ganadoras desde el servidor), transmite un mensaje con el opcode `FIN` (`3`).
 
 ## Serializacion
 

@@ -8,8 +8,17 @@ import (
 	"github.com/7574-sistemas-distribuidos/tp-nivelador/src/safe_socket"
 )
 
-const headerSize = 4
-const maxPayloadSize = (uint64(1) << (headerSize * 8)) - 1 // 2^32 bits max
+const (
+	OpcodeData byte = 0
+	OpcodeAck  byte = 1
+	OpcodeErr  byte = 2
+	OpcodeFin  byte = 3
+)
+
+const opcodeSize = 1
+const lengthSize = 4
+const headerSize = opcodeSize + lengthSize
+const maxPayloadSize = (uint64(1) << (lengthSize * 8)) - 1 // 2^32 bits max
 
 type Protocol struct {
 	socket io.ReadWriter
@@ -38,40 +47,54 @@ func (protocol *Protocol) getBytes(size int) ([]byte, error) {
 	return result, nil
 }
 
-func (protocol *Protocol) RecvMessage() ([]byte, error) {
+func (protocol *Protocol) RecvMessage() (byte, []byte, error) {
 	header, err := protocol.getBytes(headerSize)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
-	payloadLength := int(binary.BigEndian.Uint32(header))
-	return protocol.getBytes(payloadLength)
+	opcode := header[0]
+	payloadLength := int(binary.BigEndian.Uint32(header[opcodeSize:headerSize]))
+	payload, err := protocol.getBytes(payloadLength)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return opcode, payload, nil
 }
 
-func IsFin(payload []byte) bool {
-	return len(payload) == 0
-}
-
-func (protocol *Protocol) createMessage(payload []byte) ([]byte, error) {
+func (protocol *Protocol) createMessage(opcode byte, payload []byte) ([]byte, error) {
 	if uint64(len(payload)) > maxPayloadSize {
 		return nil, fmt.Errorf("payload size %d exceeds maximum %d", len(payload), maxPayloadSize)
 	}
 
 	message := make([]byte, headerSize+len(payload))
-	binary.BigEndian.PutUint32(message[:headerSize], uint32(len(payload)))
+	message[0] = opcode
+	binary.BigEndian.PutUint32(message[opcodeSize:headerSize], uint32(len(payload)))
 	copy(message[headerSize:], payload)
 	return message, nil
 }
 
-func (protocol *Protocol) SendMessage(payload []byte) error {
-	message, err := protocol.createMessage(payload)
+func (protocol *Protocol) SendMessage(opcode byte, payload []byte) error {
+	message, err := protocol.createMessage(opcode, payload)
 	if err != nil {
 		return err
 	}
 	return safe_socket.SendAll(protocol.socket, message)
 }
 
-// Empty message indicates end of transmission
+func (protocol *Protocol) SendDataMessage(payload []byte) error {
+	return protocol.SendMessage(OpcodeData, payload)
+}
+
+func (protocol *Protocol) SendAck() error {
+	return protocol.SendMessage(OpcodeAck, []byte{})
+}
+
+func (protocol *Protocol) SendErr() error {
+	return protocol.SendMessage(OpcodeErr, []byte{})
+}
+
 func (protocol *Protocol) SendFin() error {
-	return protocol.SendMessage([]byte{})
+	return protocol.SendMessage(OpcodeFin, []byte{})
 }

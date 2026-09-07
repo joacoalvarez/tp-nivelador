@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 
 const CONNECTION_ATTEMPTS_MAX = 3
 const CONNECTION_ATTEMPS_DELAY_MS = 200
+const BATCH_RETRIES_MAX = 3
 
 type ClientConfig struct {
 	ServerHost string
@@ -70,16 +72,45 @@ func (client *Client) sendBatch(payloads [][]byte, messageId int) error {
 
 	batchPayload := bytes.Join(payloads, nil)
 	messageArgs := []any{"agency-id", client.config.AgencyId, "message-id", messageId}
-	logger.Info("send-batch", logger.InProgress, messageArgs...)
-	if err := client.protocol.SendMessage(batchPayload); err != nil {
+
+	for attempt := 0; attempt < BATCH_RETRIES_MAX; attempt++ {
 		if client.shutdownRequested {
 			return nil
 		}
-		logger.Error("send-batch", logger.Fail, messageArgs...)
-		return err
+
+		logger.Info("send-batch", logger.InProgress, append(messageArgs, "attempt", attempt)...)
+		if err := client.protocol.SendDataMessage(batchPayload); err != nil {
+			if client.shutdownRequested {
+				return nil
+			}
+			logger.Error("send-batch", logger.Fail, append(messageArgs, "attempt", attempt)...)
+			return err
+		}
+
+		opcode, _, err := client.protocol.RecvMessage()
+		if err != nil {
+			if client.shutdownRequested {
+				return nil
+			}
+			logger.Error("recv-ack", logger.Fail, append(messageArgs, "attempt", attempt)...)
+			return err
+		}
+
+		if opcode == protocol.OpcodeAck {
+			return nil
+		}
+
+		if opcode == protocol.OpcodeErr {
+			logger.Warn("recv-err-resending", logger.InProgress, append(messageArgs, "attempt", attempt)...)
+			continue
+		}
+
+		logger.Error("unexpected-opcode", logger.Fail, "opcode", opcode)
+		return fmt.Errorf("unexpected opcode received: %d", opcode)
 	}
 
-	return nil
+	logger.Error("send-batch-max-retries", logger.Fail, messageArgs...)
+	return fmt.Errorf("exceeded maximum retries for batch sending after receiving ERR")
 }
 
 func (client *Client) sendBets(inputFile *os.File) error {
@@ -151,7 +182,7 @@ func (client *Client) recvResults(writer *bufio.Writer) error {
 			return nil
 		}
 
-		responseBuffer, err := client.protocol.RecvMessage()
+		opcode, responseBuffer, err := client.protocol.RecvMessage()
 		if err != nil {
 			if client.shutdownRequested {
 				return nil
@@ -160,8 +191,18 @@ func (client *Client) recvResults(writer *bufio.Writer) error {
 			return err
 		}
 
-		if protocol.IsFin(responseBuffer) {
+		if opcode == protocol.OpcodeFin {
 			return nil
+		}
+
+		if opcode == protocol.OpcodeErr {
+			logger.Error("recv-server-err", logger.Fail)
+			return fmt.Errorf("server returned error response")
+		}
+
+		if opcode != protocol.OpcodeData {
+			logger.Error("unexpected-opcode-recv-results", logger.Fail, "opcode", opcode)
+			return fmt.Errorf("unexpected opcode in recvResults: %d", opcode)
 		}
 
 		parsedBet, err := betserializer.DeserializeBet(responseBuffer)
