@@ -22,6 +22,7 @@ class Server:
         )
         os.makedirs(self.lottery_storage_path, exist_ok=True)
         self._clear_lottery_storage()
+        self.lottery_storage_lock = threading.Lock()
 
         self.agency_quorum_min = int(os.environ.get("AGENCY_QUORUM_MIN", "1"))
         if self.agency_quorum_min <= 0:
@@ -60,15 +61,15 @@ class Server:
         for filename in os.listdir(self.lottery_storage_path):
             os.remove(os.path.join(self.lottery_storage_path, filename))
 
-    def _lottery_for_agency(self, agency_id: int) -> Lottery:
+    def _lottery_file(self) -> Lottery:
         storage_path = os.path.join(
-            self.lottery_storage_path, f"agency-{agency_id}.csv"
+            self.lottery_storage_path, "lottery.csv"
         )
         return Lottery(storage_path)
 
     def _receive_bets(self, protocol: Protocol) -> tuple[int | None, int]:
         agency_id = None
-        lottery = None
+        lottery = self._lottery_file()
         message_amount = 0
 
         while not self.shutdown_event.is_set():
@@ -91,11 +92,11 @@ class Server:
                 batch_agency_id = bets[0].agency_id
                 if agency_id is None:
                     agency_id = batch_agency_id
-                    lottery = self._lottery_for_agency(agency_id)
                 elif agency_id != batch_agency_id:
                     raise ValueError("a connection cannot contain multiple agencies")
 
-                lottery.store_bets(bets)
+                with self.lottery_storage_lock:
+                    lottery.store_bets(bets)
                 message_amount += len(bets)
                 protocol.send_ack()
             except Exception as e:
@@ -110,11 +111,12 @@ class Server:
         if self.shutdown_event.is_set():
             return
         if agency_id is not None:
-            lottery = self._lottery_for_agency(agency_id)
+            lottery = self._lottery_file()
             winners = []
-            for bet in lottery.load_bets():
-                if lottery.has_won(bet):
-                    winners.append(bet)
+            with self.lottery_storage_lock:
+                for bet in lottery.load_bets():
+                    if bet.agency_id == agency_id and lottery.has_won(bet):
+                        winners.append(bet)
             for winner in winners:
                 if self.shutdown_event.is_set():
                     return
@@ -169,6 +171,7 @@ class Server:
 
     def run(self):
         action = "accept-connection"
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             self.server_socket = server_socket
             server_socket.bind((self.server_host, self.server_port))
